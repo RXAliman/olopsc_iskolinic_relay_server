@@ -52,7 +52,12 @@ void _upsert(String table, Map<String, dynamic> record) {
 }
 
 /// Get all records from both tables with HLC > sinceHlc.
-({List<Map<String, dynamic>> patients, List<Map<String, dynamic>> visitations, List<Map<String, dynamic>> inventory, List<Map<String, dynamic>> customSymptoms})
+({
+  List<Map<String, dynamic>> patients,
+  List<Map<String, dynamic>> visitations,
+  List<Map<String, dynamic>> inventory,
+  List<Map<String, dynamic>> customSymptoms,
+})
 _getChangesSince(String sinceHlc) {
   final patients = <Map<String, dynamic>>[];
   final visitations = <Map<String, dynamic>>[];
@@ -76,7 +81,12 @@ _getChangesSince(String sinceHlc) {
     if (hlc.compareTo(sinceHlc) > 0) customSymptoms.add(entry);
   }
 
-  return (patients: patients, visitations: visitations, inventory: inventory, customSymptoms: customSymptoms);
+  return (
+    patients: patients,
+    visitations: visitations,
+    inventory: inventory,
+    customSymptoms: customSymptoms,
+  );
 }
 
 /// Send a JSON message to a client.
@@ -246,6 +256,8 @@ Response _healthHandler(Request req) {
       'records': {
         'patients': _store['patients']!.length,
         'visitations': _store['visitations']!.length,
+        'inventory': _store['inventory']!.length,
+        'custom_symptoms': _store['custom_symptoms']!.length,
       },
     }),
     headers: {'content-type': 'application/json'},
