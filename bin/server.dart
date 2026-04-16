@@ -14,6 +14,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 final Map<String, Map<String, Map<String, dynamic>>> _store = {
   'patients': {},
   'visitations': {},
+  'inventory': {},
+  'custom_symptoms': {},
 };
 
 // ─── Connected clients ─────────────────────────────────────────────────────
@@ -24,6 +26,8 @@ class _Client {
   // Pagination state for sync_request / sync_ack flow.
   List<Map<String, dynamic>>? _pendingPatients;
   List<Map<String, dynamic>>? _pendingVisitations;
+  List<Map<String, dynamic>>? _pendingInventory;
+  List<Map<String, dynamic>>? _pendingCustomSymptoms;
   int _cursor = 0;
 
   _Client(this.sink);
@@ -48,10 +52,12 @@ void _upsert(String table, Map<String, dynamic> record) {
 }
 
 /// Get all records from both tables with HLC > sinceHlc.
-({List<Map<String, dynamic>> patients, List<Map<String, dynamic>> visitations})
+({List<Map<String, dynamic>> patients, List<Map<String, dynamic>> visitations, List<Map<String, dynamic>> inventory, List<Map<String, dynamic>> customSymptoms})
 _getChangesSince(String sinceHlc) {
   final patients = <Map<String, dynamic>>[];
   final visitations = <Map<String, dynamic>>[];
+  final inventory = <Map<String, dynamic>>[];
+  final customSymptoms = <Map<String, dynamic>>[];
 
   for (final entry in _store['patients']!.values) {
     final hlc = entry['hlc'] as String? ?? '';
@@ -61,8 +67,16 @@ _getChangesSince(String sinceHlc) {
     final hlc = entry['hlc'] as String? ?? '';
     if (hlc.compareTo(sinceHlc) > 0) visitations.add(entry);
   }
+  for (final entry in _store['inventory']!.values) {
+    final hlc = entry['hlc'] as String? ?? '';
+    if (hlc.compareTo(sinceHlc) > 0) inventory.add(entry);
+  }
+  for (final entry in _store['custom_symptoms']!.values) {
+    final hlc = entry['hlc'] as String? ?? '';
+    if (hlc.compareTo(sinceHlc) > 0) customSymptoms.add(entry);
+  }
 
-  return (patients: patients, visitations: visitations);
+  return (patients: patients, visitations: visitations, inventory: inventory, customSymptoms: customSymptoms);
 }
 
 /// Send a JSON message to a client.
@@ -86,11 +100,15 @@ void _broadcast(Map<String, dynamic> data, {_Client? except}) {
 void _sendNextBatch(_Client client, int batchSize) {
   final patients = client._pendingPatients ?? [];
   final visitations = client._pendingVisitations ?? [];
+  final inventory = client._pendingInventory ?? [];
+  final customSymptoms = client._pendingCustomSymptoms ?? [];
 
   // Combine into a single list for pagination.
   final combined = <Map<String, dynamic>>[
     for (final p in patients) {'_table': 'patients', ...p},
     for (final v in visitations) {'_table': 'visitations', ...v},
+    for (final i in inventory) {'_table': 'inventory', ...i},
+    for (final c in customSymptoms) {'_table': 'custom_symptoms', ...c},
   ];
 
   final start = client._cursor;
@@ -100,13 +118,19 @@ void _sendNextBatch(_Client client, int batchSize) {
   // Split batch back into patients and visitations.
   final batchPatients = <Map<String, dynamic>>[];
   final batchVisitations = <Map<String, dynamic>>[];
+  final batchInventory = <Map<String, dynamic>>[];
+  final batchCustomSymptoms = <Map<String, dynamic>>[];
   for (final item in batch) {
     final table = item['_table'];
     final clean = Map<String, dynamic>.from(item)..remove('_table');
     if (table == 'patients') {
       batchPatients.add(clean);
-    } else {
+    } else if (table == 'visitations') {
       batchVisitations.add(clean);
+    } else if (table == 'inventory') {
+      batchInventory.add(clean);
+    } else if (table == 'custom_symptoms') {
+      batchCustomSymptoms.add(clean);
     }
   }
 
@@ -117,6 +141,8 @@ void _sendNextBatch(_Client client, int batchSize) {
     'type': 'sync_response',
     'patients': batchPatients,
     'visitations': batchVisitations,
+    'inventory': batchInventory,
+    'custom_symptoms': batchCustomSymptoms,
     'hasMore': hasMore,
   });
 
@@ -124,6 +150,8 @@ void _sendNextBatch(_Client client, int batchSize) {
   if (!hasMore) {
     client._pendingPatients = null;
     client._pendingVisitations = null;
+    client._pendingInventory = null;
+    client._pendingCustomSymptoms = null;
     client._cursor = 0;
   }
 }
@@ -171,6 +199,8 @@ Handler _webSocketHandler() {
               final changes = _getChangesSince(sinceHlc);
               client._pendingPatients = changes.patients;
               client._pendingVisitations = changes.visitations;
+              client._pendingInventory = changes.inventory;
+              client._pendingCustomSymptoms = changes.customSymptoms;
               client._cursor = 0;
 
               _sendNextBatch(client, batchSize);
