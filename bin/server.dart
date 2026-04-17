@@ -169,6 +169,11 @@ void _sendNextBatch(_Client client, int batchSize) {
 // ─── WebSocket handler ─────────────────────────────────────────────────────
 
 Handler _webSocketHandler() {
+  final syncSecret = Platform.environment['SYNC_SECRET'];
+  if (syncSecret == null || syncSecret.isEmpty) {
+    print('WARNING: SYNC_SECRET not set. Server is running without authentication.');
+  }
+
   return webSocketHandler((WebSocketChannel channel, String? subprotocol) {
     final client = _Client(channel.sink);
     _clients.add(client);
@@ -178,6 +183,18 @@ Handler _webSocketHandler() {
       (raw) {
         try {
           final msg = jsonDecode(raw as String) as Map<String, dynamic>;
+          
+          // ── Authentication Check ─────────────────────────────────
+          if (syncSecret != null && syncSecret.isNotEmpty) {
+            final clientSecret = msg['authSecret'] as String?;
+            if (clientSecret != syncSecret) {
+              print('Authentication failed for client. Closing connection.');
+              _sendTo(client, {'type': 'error', 'message': 'Unauthorized'});
+              channel.sink.close();
+              return;
+            }
+          }
+
           final type = msg['type'] as String?;
 
           switch (type) {
