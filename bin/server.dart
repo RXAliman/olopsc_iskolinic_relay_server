@@ -44,13 +44,19 @@ void _upsert(String table, Map<String, dynamic> record) {
   final id = record['id'] as String?;
   if (id == null) return;
 
-  final existing = _store[table]?[id];
+  final tableStore = _store[table];
+  if (tableStore == null) {
+    print('WARNING: _upsert called with unknown table: "$table" — skipping.');
+    return;
+  }
+
+  final existing = tableStore[id];
   if (existing != null) {
     final existingHlc = existing['hlc'] as String? ?? '';
     final incomingHlc = record['hlc'] as String? ?? '';
     if (incomingHlc.compareTo(existingHlc) <= 0) return; // existing wins
   }
-  _store[table]![id] = record;
+  tableStore[id] = record;
 }
 
 /// Get all records from all tables with HLC > sinceHlc.
@@ -254,6 +260,21 @@ Handler _webSocketHandler() {
             case 'sync_ack':
               final batchSize = msg['batchSize'] as int? ?? 50;
               _sendNextBatch(client, batchSize);
+              break;
+
+            // ── Handshake (detect server resets) ──────────────────────────
+            case 'handshake_request':
+              final requestNodeId = msg['nodeId'] as String? ?? '';
+              final recognized = _store['patients']!.values.any(
+                (r) => r['nodeId'] == requestNodeId,
+              ) || _store['inventory']!.values.any(
+                (r) => r['nodeId'] == requestNodeId,
+              );
+              _sendTo(client, {
+                'type': 'handshake_response',
+                'recognized': recognized,
+                'server_reset': !recognized && _store['patients']!.isEmpty,
+              });
               break;
 
             default:
