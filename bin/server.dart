@@ -15,6 +15,7 @@ final Map<String, Map<String, Map<String, dynamic>>> _store = {
   'patients': {},
   'visitations': {},
   'inventory': {},
+  'inventory_stocks': {},
   'custom_symptoms': {},
 };
 
@@ -27,6 +28,7 @@ class _Client {
   List<Map<String, dynamic>>? _pendingPatients;
   List<Map<String, dynamic>>? _pendingVisitations;
   List<Map<String, dynamic>>? _pendingInventory;
+  List<Map<String, dynamic>>? _pendingInventoryStocks;
   List<Map<String, dynamic>>? _pendingCustomSymptoms;
   int _cursor = 0;
 
@@ -42,26 +44,34 @@ void _upsert(String table, Map<String, dynamic> record) {
   final id = record['id'] as String?;
   if (id == null) return;
 
-  final existing = _store[table]?[id];
+  final tableStore = _store[table];
+  if (tableStore == null) {
+    print('WARNING: _upsert called with unknown table: "$table" — skipping.');
+    return;
+  }
+
+  final existing = tableStore[id];
   if (existing != null) {
     final existingHlc = existing['hlc'] as String? ?? '';
     final incomingHlc = record['hlc'] as String? ?? '';
     if (incomingHlc.compareTo(existingHlc) <= 0) return; // existing wins
   }
-  _store[table]![id] = record;
+  tableStore[id] = record;
 }
 
-/// Get all records from both tables with HLC > sinceHlc.
+/// Get all records from all tables with HLC > sinceHlc.
 ({
   List<Map<String, dynamic>> patients,
   List<Map<String, dynamic>> visitations,
   List<Map<String, dynamic>> inventory,
+  List<Map<String, dynamic>> inventoryStocks,
   List<Map<String, dynamic>> customSymptoms,
 })
 _getChangesSince(String sinceHlc) {
   final patients = <Map<String, dynamic>>[];
   final visitations = <Map<String, dynamic>>[];
   final inventory = <Map<String, dynamic>>[];
+  final inventoryStocks = <Map<String, dynamic>>[];
   final customSymptoms = <Map<String, dynamic>>[];
 
   for (final entry in _store['patients']!.values) {
@@ -76,6 +86,10 @@ _getChangesSince(String sinceHlc) {
     final hlc = entry['hlc'] as String? ?? '';
     if (hlc.compareTo(sinceHlc) > 0) inventory.add(entry);
   }
+  for (final entry in _store['inventory_stocks']!.values) {
+    final hlc = entry['hlc'] as String? ?? '';
+    if (hlc.compareTo(sinceHlc) > 0) inventoryStocks.add(entry);
+  }
   for (final entry in _store['custom_symptoms']!.values) {
     final hlc = entry['hlc'] as String? ?? '';
     if (hlc.compareTo(sinceHlc) > 0) customSymptoms.add(entry);
@@ -85,6 +99,7 @@ _getChangesSince(String sinceHlc) {
     patients: patients,
     visitations: visitations,
     inventory: inventory,
+    inventoryStocks: inventoryStocks,
     customSymptoms: customSymptoms,
   );
 }
@@ -111,6 +126,7 @@ void _sendNextBatch(_Client client, int batchSize) {
   final patients = client._pendingPatients ?? [];
   final visitations = client._pendingVisitations ?? [];
   final inventory = client._pendingInventory ?? [];
+  final inventoryStocks = client._pendingInventoryStocks ?? [];
   final customSymptoms = client._pendingCustomSymptoms ?? [];
 
   // Combine into a single list for pagination.
@@ -118,6 +134,7 @@ void _sendNextBatch(_Client client, int batchSize) {
     for (final p in patients) {'_table': 'patients', ...p},
     for (final v in visitations) {'_table': 'visitations', ...v},
     for (final i in inventory) {'_table': 'inventory', ...i},
+    for (final s in inventoryStocks) {'_table': 'inventory_stocks', ...s},
     for (final c in customSymptoms) {'_table': 'custom_symptoms', ...c},
   ];
 
@@ -125,10 +142,11 @@ void _sendNextBatch(_Client client, int batchSize) {
   final end = (start + batchSize).clamp(0, combined.length);
   final batch = start < combined.length ? combined.sublist(start, end) : [];
 
-  // Split batch back into patients and visitations.
+  // Split batch back into per-table lists.
   final batchPatients = <Map<String, dynamic>>[];
   final batchVisitations = <Map<String, dynamic>>[];
   final batchInventory = <Map<String, dynamic>>[];
+  final batchInventoryStocks = <Map<String, dynamic>>[];
   final batchCustomSymptoms = <Map<String, dynamic>>[];
   for (final item in batch) {
     final table = item['_table'];
@@ -139,6 +157,8 @@ void _sendNextBatch(_Client client, int batchSize) {
       batchVisitations.add(clean);
     } else if (table == 'inventory') {
       batchInventory.add(clean);
+    } else if (table == 'inventory_stocks') {
+      batchInventoryStocks.add(clean);
     } else if (table == 'custom_symptoms') {
       batchCustomSymptoms.add(clean);
     }
@@ -152,6 +172,7 @@ void _sendNextBatch(_Client client, int batchSize) {
     'patients': batchPatients,
     'visitations': batchVisitations,
     'inventory': batchInventory,
+    'inventory_stocks': batchInventoryStocks,
     'custom_symptoms': batchCustomSymptoms,
     'hasMore': hasMore,
   });
@@ -161,6 +182,7 @@ void _sendNextBatch(_Client client, int batchSize) {
     client._pendingPatients = null;
     client._pendingVisitations = null;
     client._pendingInventory = null;
+    client._pendingInventoryStocks = null;
     client._pendingCustomSymptoms = null;
     client._cursor = 0;
   }
@@ -227,6 +249,7 @@ Handler _webSocketHandler() {
               client._pendingPatients = changes.patients;
               client._pendingVisitations = changes.visitations;
               client._pendingInventory = changes.inventory;
+              client._pendingInventoryStocks = changes.inventoryStocks;
               client._pendingCustomSymptoms = changes.customSymptoms;
               client._cursor = 0;
 
@@ -237,6 +260,21 @@ Handler _webSocketHandler() {
             case 'sync_ack':
               final batchSize = msg['batchSize'] as int? ?? 50;
               _sendNextBatch(client, batchSize);
+              break;
+
+            // ── Handshake (detect server resets) ──────────────────────────
+            case 'handshake_request':
+              final requestNodeId = msg['nodeId'] as String? ?? '';
+              final recognized = _store['patients']!.values.any(
+                (r) => r['nodeId'] == requestNodeId,
+              ) || _store['inventory']!.values.any(
+                (r) => r['nodeId'] == requestNodeId,
+              );
+              _sendTo(client, {
+                'type': 'handshake_response',
+                'recognized': recognized,
+                'server_reset': !recognized && _store['patients']!.isEmpty,
+              });
               break;
 
             default:
@@ -274,6 +312,7 @@ Response _healthHandler(Request req) {
         'patients': _store['patients']!.length,
         'visitations': _store['visitations']!.length,
         'inventory': _store['inventory']!.length,
+        'inventory_stocks': _store['inventory_stocks']!.length,
         'custom_symptoms': _store['custom_symptoms']!.length,
       },
     }),
