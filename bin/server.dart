@@ -193,7 +193,9 @@ void _sendNextBatch(_Client client, int batchSize) {
 Handler _webSocketHandler() {
   final syncSecret = Platform.environment['SYNC_SECRET'];
   if (syncSecret == null || syncSecret.isEmpty) {
-    print('WARNING: SYNC_SECRET not set. Server is running without authentication.');
+    print(
+      'WARNING: SYNC_SECRET not set. Server is running without authentication.',
+    );
   }
 
   return webSocketHandler((WebSocketChannel channel, String? subprotocol) {
@@ -205,7 +207,7 @@ Handler _webSocketHandler() {
       (raw) {
         try {
           final msg = jsonDecode(raw as String) as Map<String, dynamic>;
-          
+
           // ── Authentication Check ─────────────────────────────────
           if (syncSecret != null && syncSecret.isNotEmpty) {
             final clientSecret = msg['authSecret'] as String?;
@@ -265,11 +267,13 @@ Handler _webSocketHandler() {
             // ── Handshake (detect server resets) ──────────────────────────
             case 'handshake_request':
               final requestNodeId = msg['nodeId'] as String? ?? '';
-              final recognized = _store['patients']!.values.any(
-                (r) => r['nodeId'] == requestNodeId,
-              ) || _store['inventory']!.values.any(
-                (r) => r['nodeId'] == requestNodeId,
-              );
+              final recognized =
+                  _store['patients']!.values.any(
+                    (r) => r['nodeId'] == requestNodeId,
+                  ) ||
+                  _store['inventory']!.values.any(
+                    (r) => r['nodeId'] == requestNodeId,
+                  );
               _sendTo(client, {
                 'type': 'handshake_response',
                 'recognized': recognized,
@@ -331,5 +335,27 @@ void main(List<String> args) async {
 
   final port = int.parse(Platform.environment['PORT'] ?? '8080');
   final server = await serve(handler, ip, port);
-  print('Relay server listening on port ${server.port}');
+
+  print('================================================================');
+  print(' OLOPSC IskoLinic Relay Server successfully started!');
+  print(' Listening on port ${server.port}');
+  print('================================================================');
+  print('Connect to this server from other devices on the same WiFi/LAN:');
+
+  try {
+    final interfaces = await NetworkInterface.list(
+      includeLoopback: true,
+      includeLinkLocal: false,
+      type: InternetAddressType.IPv4,
+    );
+    for (final interface in interfaces) {
+      for (final addr in interface.addresses) {
+        final label = addr.isLoopback ? 'Local Loopback' : interface.name;
+        print('  • ws://${addr.address}:${server.port}/ws  ($label)');
+      }
+    }
+  } catch (e) {
+    print('  - ws://<your-computer-ip>:${server.port}/ws');
+  }
+  print('================================================================');
 }
